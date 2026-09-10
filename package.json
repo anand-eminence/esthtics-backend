@@ -1,0 +1,37 @@
+{
+  "name": "tec-admin-api",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4001",
+    "build": "prisma generate && next build",
+    "start": "sh -c 'next start -p ${PORT:-4001}'",
+    "lint": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "db:reset": "prisma migrate reset --force",
+    "db:migrate-poc": "tsx prisma/migrate-poc.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.14.0",
+    "bcryptjs": "^3.0.2",
+    "jose": "^6.0.11",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "prisma": "^6.14.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

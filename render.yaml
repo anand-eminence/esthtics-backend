@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tec-admin-api
+    runtime: node
+    buildCommand: npm install && npx prisma generate && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_TOKEN_TTL
+        value: 12h
+      - key: QUIZ_TIMEZONE
+        value: America/New_York
+      - key: ALLOWED_ORIGINS
+        sync: false

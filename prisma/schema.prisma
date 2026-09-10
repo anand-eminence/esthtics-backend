@@ -1,0 +1,248 @@
+// The Esti Confidential — Daily Quiz
+// Admin panel + member quiz data model.
+//
+// Field names follow the admin screens (scope/4.png .. scope/12.png) rather than
+// the POC's shorthand, so the form in A4 maps one-to-one onto columns here.
+// POC name -> here:  track -> displayTag, aha -> whyThisMatters,
+//                    lbl -> chairLabel, chair -> chairText, DailyDrop -> FeaturedContent.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Admin side
+// ---------------------------------------------------------------------------
+
+/// The admin panel has one role. Anyone who can sign in is an administrator
+/// with full access. Kept as an enum so a narrower role can be added later
+/// without reshaping AdminUser.
+enum AdminRole {
+  ADMINISTRATOR
+}
+
+enum AdminStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+model AdminUser {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  name         String
+  passwordHash String?     // null until an invited user sets their password
+  role         AdminRole   @default(ADMINISTRATOR)
+  status       AdminStatus @default(INVITED)
+  lastLoginAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  invitedById String?
+  invitedBy   AdminUser?  @relation("AdminInvites", fields: [invitedById], references: [id])
+  invitees    AdminUser[] @relation("AdminInvites")
+
+  questionsCreated Question[] @relation("QuestionCreatedBy")
+  questionsUpdated Question[] @relation("QuestionUpdatedBy")
+
+  @@index([role])
+}
+
+// ---------------------------------------------------------------------------
+// Content
+// ---------------------------------------------------------------------------
+
+/// The five fixed themes. A table rather than an enum so Adam can rename a
+/// label from Settings without a migration.
+model Theme {
+  id        String  @id @default(cuid())
+  key       String  @unique // facial | products | business | ingredient | random
+  label     String // "Facial Protocols"
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  questions Question[]
+  answers   Answer[]
+
+  @@index([sortOrder])
+}
+
+enum QuestionStatus {
+  DRAFT // invisible to the quiz
+  READY // scheduled, served on its date
+  PUBLISHED // served on its date
+  ARCHIVED
+}
+
+model Question {
+  id       String  @id @default(cuid())
+  quizDate String // YYYY-MM-DD in the configured timezone
+  slot     Int // 1..3 for the daily three, 4 for the bonus
+  isBonus  Boolean @default(false)
+
+  themeId String
+  theme   Theme  @relation(fields: [themeId], references: [id])
+
+  prompt       String
+  options      String[] // 2..6 options, index-aligned with correctIndex
+  correctIndex Int // never leaves the server except on the answer response
+
+  displayTag     String @default("") // A4 "Display tag" — the small label above the question
+  whyThisMatters String @default("") // the explanation shown after answering
+  chairLabel     String @default("") // "Say this to a client"
+  chairText      String @default("")
+
+  deepDiveText String @default("")
+  sourceLabel  String @default("")
+  sourceUrl    String @default("")
+  goDeeperUrl  String @default("") // blank falls back to Setting.defaultGoDeeperUrl
+
+  internalNotes String @default("") // never sent to members
+
+  status QuestionStatus @default(DRAFT)
+
+  createdById String?
+  createdBy   AdminUser? @relation("QuestionCreatedBy", fields: [createdById], references: [id])
+  updatedById String?
+  updatedBy   AdminUser? @relation("QuestionUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  answers Answer[]
+
+  @@unique([quizDate, slot])
+  @@index([quizDate, status])
+  @@index([themeId])
+  @@index([status])
+}
+
+enum FeaturedStatus {
+  DRAFT
+  READY
+  LIVE
+}
+
+/// A6 · Featured content. Replaces the POC's DailyDrop. Not a question:
+/// nothing is recorded against the member and skipping it changes nothing.
+model FeaturedContent {
+  id          String         @id @default(cuid())
+  quizDate    String         @unique
+  title       String
+  bodyText    String         @default("")
+  buttonLabel String         @default("")
+  linkUrl     String         @default("")
+  imageUrl    String         @default("")
+  shownAfter  String         @default("final_question")
+  status      FeaturedStatus @default(DRAFT)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Members and play
+// ---------------------------------------------------------------------------
+
+model Member {
+  id        String @id @default(cuid())
+  circleUid String @unique
+  email     String @default("")
+  name      String @default("")
+
+  currentStreak    Int     @default(0)
+  longestStreak    Int     @default(0)
+  longestStreakEnd String? // YYYY-MM-DD, powers "ended 2 July" on A8
+  lastPlayedDate   String? // YYYY-MM-DD
+  firstPlayedDate  String?
+  daysPlayed       Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  answers  Answer[]
+  progress DailyProgress[]
+
+  @@index([currentStreak])
+  @@index([lastPlayedDate])
+}
+
+model Answer {
+  id String @id @default(cuid())
+
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  themeId String
+  theme   Theme  @relation(fields: [themeId], references: [id])
+
+  quizDate      String
+  slot          Int
+  selectedIndex Int
+  correct       Boolean
+  isBonus       Boolean @default(false)
+  streakAtPlay  Int     @default(0) // A8 "Streak at play"
+
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, questionId]) // one write per answer; a refresh cannot double-record
+  @@index([quizDate])
+  @@index([memberId, quizDate])
+  @@index([questionId])
+  @@index([themeId, correct])
+}
+
+/// Q9 · Resume and Q10 · Already played. One row per member per day, so
+/// "where did she get to" is a single lookup instead of scanning answers.
+model DailyProgress {
+  id       String @id @default(cuid())
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  quizDate String
+
+  answeredCount Int @default(0)
+  correctCount  Int @default(0)
+  requiredCount Int @default(3) // the non-bonus questions published that day
+
+  bonusOffered Boolean   @default(false)
+  bonusPlayed  Boolean   @default(false)
+  completedAt  DateTime?
+  streakAfter  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([memberId, quizDate])
+  @@index([quizDate])
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// A10 · Settings. Single row, id is always "singleton".
+model Setting {
+  id String @id @default("singleton")
+
+  timezone            String @default("America/New_York")
+  questionsPerDay     Int    @default(3)
+  bonusEnabled        Boolean @default(true)
+  joinUrl             String @default("")
+  defaultGoDeeperUrl  String @default("")
+  referralUrl         String @default("")
+
+  /// Where the member quiz HTML is hosted. Used to build the embed snippet the
+  /// admin pastes into a Circle post's Custom HTML block.
+  quizEmbedUrl        String @default("")
+
+  updatedAt DateTime @updatedAt
+}
