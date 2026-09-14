@@ -22,7 +22,7 @@ export const GET = route(async (req) => {
       }),
       prisma.answer.count({ where: { quizDate: date } }),
       prisma.question.findMany({
-        where: { quizDate: date, status: { not: "ARCHIVED" } },
+        where: { quizDate: date },
         include: { theme: true, _count: { select: { answers: true } } },
         orderBy: { slot: "asc" },
       }),

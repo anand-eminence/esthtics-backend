@@ -1,9 +1,7 @@
-import type { Prisma, Question, QuestionStatus, Theme } from "@prisma/client";
+import type { Prisma, Question, Theme } from "@prisma/client";
+import { isLive } from "./days";
 import { ApiError } from "./http";
 import { prisma } from "./prisma";
-
-/** A3: "Only rows set to Ready or Published are served to members." */
-export const SERVED_STATUSES: QuestionStatus[] = ["READY", "PUBLISHED"];
 
 export type ServedQuestion = Question & { theme: Theme };
 
@@ -33,12 +31,21 @@ export async function upsertMember(input: {
   });
 }
 
-export function servedQuestions(quizDate: string) {
-  return prisma.question.findMany({
-    where: { quizDate, status: { in: SERVED_STATUSES } },
-    include: { theme: true },
-    orderBy: { slot: "asc" },
-  });
+/**
+ * The questions members get for a date: every question on it once the day is
+ * live, and none before. A half-filled or unpublished day is never served —
+ * the rules are in lib/days.ts.
+ */
+export async function servedQuestions(quizDate: string): Promise<ServedQuestion[]> {
+  const [live, questions] = await Promise.all([
+    isLive(quizDate),
+    prisma.question.findMany({
+      where: { quizDate },
+      include: { theme: true },
+      orderBy: { slot: "asc" },
+    }),
+  ]);
+  return live ? questions : [];
 }
 
 /**
@@ -72,18 +79,18 @@ export function revealPayload(q: ServedQuestion, defaultGoDeeperUrl: string) {
 }
 
 /**
- * The most recent earlier date that actually had questions scheduled.
+ * The most recent earlier day that was live.
  *
- * Streaks are measured against this rather than literal yesterday, so a day the
- * admin left empty does not break every member's streak through no fault of
- * their own.
+ * Streaks are measured against this rather than literal yesterday, so a day
+ * that never went live — empty, half filled, or simply not published — does
+ * not break every member's streak through no fault of their own.
  */
 export async function previousScheduledDate(
   tx: Prisma.TransactionClient,
   quizDate: string,
 ): Promise<string | null> {
-  const previous = await tx.question.findFirst({
-    where: { quizDate: { lt: quizDate }, isBonus: false, status: { in: SERVED_STATUSES } },
+  const previous = await tx.quizDay.findFirst({
+    where: { quizDate: { lt: quizDate }, publishedAt: { not: null } },
     orderBy: { quizDate: "desc" },
     select: { quizDate: true },
   });

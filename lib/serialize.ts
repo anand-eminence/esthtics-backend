@@ -2,8 +2,9 @@ import type { FeaturedContent, Member, Prisma, Question, Theme } from "@prisma/c
 
 type QuestionWithTheme = Question & { theme: Theme };
 
-/** Shape used by A3 · Question bank rows. */
-export function questionRow(q: QuestionWithTheme) {
+/** Shape used by A3 · Question bank rows. `dayLive` belongs to the question's
+ *  date — publishing is per day, not per question (lib/days.ts). */
+export function questionRow(q: QuestionWithTheme, dayLive: boolean) {
   return {
     id: q.id,
     quizDate: q.quizDate,
@@ -11,17 +12,18 @@ export function questionRow(q: QuestionWithTheme) {
     isBonus: q.isBonus,
     theme: { id: q.theme.id, key: q.theme.key, label: q.theme.label },
     prompt: q.prompt,
-    status: q.status,
+    dayLive,
     hasDeepDive: Boolean(q.deepDiveText.trim()),
     updatedAt: q.updatedAt,
   };
 }
 
 /** Shape used by A4 · Add or edit question. Includes correctIndex — this
- *  endpoint is admin-only and never reaches a member's browser. */
-export function questionDetail(q: QuestionWithTheme) {
+ *  endpoint is admin-only and never reaches a member's browser. `answerCount`
+ *  is what locks the options and correct answer once members have played. */
+export function questionDetail(q: QuestionWithTheme, dayLive: boolean, answerCount: number) {
   return {
-    ...questionRow(q),
+    ...questionRow(q, dayLive),
     themeId: q.themeId,
     options: q.options,
     correctIndex: q.correctIndex,
@@ -35,6 +37,7 @@ export function questionDetail(q: QuestionWithTheme) {
     goDeeperUrl: q.goDeeperUrl,
     internalNotes: q.internalNotes,
     createdAt: q.createdAt,
+    answerCount,
   };
 }
 

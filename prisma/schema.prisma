@@ -49,6 +49,7 @@ model AdminUser {
 
   questionsCreated Question[] @relation("QuestionCreatedBy")
   questionsUpdated Question[] @relation("QuestionUpdatedBy")
+  daysPublished    QuizDay[]  @relation("QuizDayPublishedBy")
 
   @@index([role])
 }
@@ -72,13 +73,8 @@ model Theme {
   @@index([sortOrder])
 }
 
-enum QuestionStatus {
-  DRAFT // invisible to the quiz
-  READY // scheduled, served on its date
-  PUBLISHED // served on its date
-  ARCHIVED
-}
-
+/// A question is content only. Whether members see it is decided by its day —
+/// see QuizDay.
 model Question {
   id       String  @id @default(cuid())
   quizDate String // YYYY-MM-DD in the configured timezone
@@ -104,8 +100,6 @@ model Question {
 
   internalNotes String @default("") // never sent to members
 
-  status QuestionStatus @default(DRAFT)
-
   createdById String?
   createdBy   AdminUser? @relation("QuestionCreatedBy", fields: [createdById], references: [id])
   updatedById String?
@@ -117,9 +111,23 @@ model Question {
   answers Answer[]
 
   @@unique([quizDate, slot])
-  @@index([quizDate, status])
   @@index([themeId])
-  @@index([status])
+}
+
+/// A quiz day, and whether members can see it.
+///
+/// Publishing belongs to the day rather than to each question: a date reaches
+/// members only once all three core slots are saved and the day is published.
+/// The rules that go with it live in lib/days.ts.
+model QuizDay {
+  quizDate      String     @id // YYYY-MM-DD in the configured timezone
+  publishedAt   DateTime? // null = not live
+  publishedById String?
+  publishedBy   AdminUser? @relation("QuizDayPublishedBy", fields: [publishedById], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([publishedAt])
 }
 
 enum FeaturedStatus {
@@ -211,7 +219,7 @@ model DailyProgress {
 
   answeredCount Int @default(0)
   correctCount  Int @default(0)
-  requiredCount Int @default(3) // the non-bonus questions published that day
+  requiredCount Int @default(3) // the non-bonus questions on that live day
 
   bonusOffered Boolean   @default(false)
   bonusPlayed  Boolean   @default(false)
@@ -229,12 +237,12 @@ model DailyProgress {
 // Settings
 // ---------------------------------------------------------------------------
 
-/// A10 · Settings. Single row, id is always "singleton".
+/// A10 · Settings. Single row, id is always "singleton". Every day has exactly
+/// three core questions, so that is not a setting.
 model Setting {
   id String @id @default("singleton")
 
   timezone            String @default("America/New_York")
-  questionsPerDay     Int    @default(3)
   bonusEnabled        Boolean @default(true)
   joinUrl             String @default("")
   defaultGoDeeperUrl  String @default("")

@@ -1,12 +1,5 @@
 import { ApiError, notFound, quizJson, quizPreflight, quizRoute, readJson } from "@/lib/http";
-import { prisma } from "@/lib/prisma";
-import {
-  SERVED_STATUSES,
-  requireUid,
-  revealPayload,
-  servedQuestions,
-  upsertMember,
-} from "@/lib/quiz";
+import { requireUid, revealPayload, servedQuestions, upsertMember } from "@/lib/quiz";
 import { getSettings, today } from "@/lib/settings";
 import { recordAnswer } from "@/lib/streak";
 
@@ -39,16 +32,13 @@ export const POST = quizRoute(async (req) => {
   const settings = await getSettings();
   const quizDate = await today();
 
-  const question = await prisma.question.findUnique({
-    where: { id: questionId },
-    include: { theme: true },
-  });
+  // Only a live day has served questions, so anything not among today's —
+  // another date, or a day that isn't published — is not part of the quiz.
+  const todaysQuestions = await servedQuestions(quizDate);
+  const question = todaysQuestions.find((q) => q.id === questionId);
 
-  if (!question || !SERVED_STATUSES.includes(question.status)) {
-    throw notFound("Question not found");
-  }
-  if (question.quizDate !== quizDate) {
-    throw new ApiError("This question is not part of today's quiz", 400);
+  if (!question) {
+    throw notFound("This question is not part of today's quiz");
   }
   if (selectedIndex >= question.options.length) {
     throw new ApiError("selectedIndex is out of range", 400);
@@ -57,10 +47,7 @@ export const POST = quizRoute(async (req) => {
     throw new ApiError("The bonus question is not being offered", 400);
   }
 
-  const [member, todaysQuestions] = await Promise.all([
-    upsertMember({ uid, email: body.email, name: body.name }),
-    servedQuestions(quizDate),
-  ]);
+  const member = await upsertMember({ uid, email: body.email, name: body.name });
 
   const outcome = await recordAnswer({
     memberId: member.id,

@@ -1,5 +1,6 @@
 import { requireSession } from "@/lib/auth";
 import { addDays } from "@/lib/date";
+import { dayState, liveDates, missingCoreSlots } from "@/lib/days";
 import { json, preflight, route } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { percent } from "@/lib/serialize";
@@ -10,7 +11,7 @@ export const OPTIONS = preflight;
 const LOOKAHEAD_DAYS = 14;
 const SCHEDULED_AHEAD = 5;
 
-/** A2 · Dashboard — is today set up, and is anything missing in the days ahead. */
+/** A2 · Dashboard — is today live, and is anything missing in the days ahead. */
 export const GET = route(async (req) => {
   await requireSession(req);
 
@@ -27,6 +28,7 @@ export const GET = route(async (req) => {
     topStreak,
     todaysQuestions,
     aheadQuestions,
+    live,
   ] = await Promise.all([
     prisma.member.count(),
     prisma.dailyProgress.findMany({
@@ -44,14 +46,15 @@ export const GET = route(async (req) => {
       select: { name: true, currentStreak: true },
     }),
     prisma.question.findMany({
-      where: { quizDate: date, status: { not: "ARCHIVED" } },
+      where: { quizDate: date },
       include: { theme: true, _count: { select: { answers: true } } },
       orderBy: { slot: "asc" },
     }),
     prisma.question.findMany({
-      where: { quizDate: { in: upcoming }, status: { not: "ARCHIVED" } },
-      select: { quizDate: true, slot: true, isBonus: true, status: true },
+      where: { quizDate: { in: upcoming } },
+      select: { quizDate: true, slot: true, isBonus: true },
     }),
+    liveDates([date, ...upcoming]),
   ]);
 
   // Correct-so-far per question needs a second pass; one grouped query covers all of today.
@@ -64,63 +67,47 @@ export const GET = route(async (req) => {
     correctByQuestion.map((r) => [r.questionId, r._count._all]),
   );
 
-  const byDate = new Map<
-    string,
-    { slots: Set<number>; bonus: boolean; anyDraft: boolean }
-  >();
+  const byDate = new Map<string, { slots: Set<number>; bonus: boolean }>();
   for (const q of aheadQuestions) {
-    const entry = byDate.get(q.quizDate) ?? {
-      slots: new Set<number>(),
-      bonus: false,
-      anyDraft: false,
-    };
+    const entry = byDate.get(q.quizDate) ?? { slots: new Set<number>(), bonus: false };
     if (q.isBonus) entry.bonus = true;
     else entry.slots.add(q.slot);
-    if (q.status === "DRAFT") entry.anyDraft = true;
     byDate.set(q.quizDate, entry);
   }
 
-  const needsAttention: Array<{
-    date: string;
-    severity: "empty" | "incomplete";
-    filled: number;
-    required: number;
-    missingSlots: number[];
-    hasDraft: boolean;
-  }> = [];
-
-  for (const day of upcoming) {
-    const entry = byDate.get(day);
-    const filled = entry ? entry.slots.size : 0;
-    if (filled >= settings.questionsPerDay && !entry?.anyDraft) continue;
-
-    const missingSlots = Array.from(
-      { length: settings.questionsPerDay },
-      (_, i) => i + 1,
-    ).filter((slot) => !entry?.slots.has(slot));
-    needsAttention.push({
-      date: day,
-      severity: filled === 0 ? "empty" : "incomplete",
-      filled,
-      required: settings.questionsPerDay,
-      missingSlots,
-      hasDraft: Boolean(entry?.anyDraft),
+  // Every upcoming day that isn't live yet, with what it still needs. A day
+  // with all three saved is still listed — it reaches nobody until published.
+  const needsAttention = upcoming
+    .filter((day) => !live.has(day))
+    .map((day) => {
+      const slots = byDate.get(day)?.slots ?? new Set<number>();
+      return {
+        date: day,
+        state: dayState(slots.size, false),
+        filled: slots.size,
+        missingSlots: missingCoreSlots(slots),
+      };
     });
-  }
 
   const scheduledAhead = upcoming.slice(0, SCHEDULED_AHEAD).map((day) => {
-    const entry = byDate.get(day);
+    const filled = byDate.get(day)?.slots.size ?? 0;
     return {
       date: day,
-      questionCount: entry ? entry.slots.size : 0,
-      hasBonus: Boolean(entry?.bonus),
-      isComplete: (entry?.slots.size ?? 0) >= settings.questionsPerDay,
+      questionCount: filled,
+      hasBonus: Boolean(byDate.get(day)?.bonus),
+      state: dayState(filled, live.has(day)),
     };
   });
+
+  const todayCore = todaysQuestions.filter((q) => !q.isBonus).map((q) => q.slot);
 
   return json(req, {
     date,
     timezone: settings.timezone,
+    today: {
+      state: dayState(todayCore.length, live.has(date)),
+      missingSlots: missingCoreSlots(todayCore),
+    },
     stats: {
       playedToday: progressToday.length,
       totalMembers,
@@ -144,7 +131,6 @@ export const GET = route(async (req) => {
         prompt: q.prompt,
         answered,
         correctPct: percent(correctMap.get(q.id) ?? 0, answered),
-        status: q.status,
       };
     }),
     needsAttention,

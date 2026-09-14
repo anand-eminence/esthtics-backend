@@ -1,4 +1,5 @@
 import { requireSession } from "@/lib/auth";
+import { TX_OPTIONS, dayInfo, isLive, publishDay } from "@/lib/days";
 import { ApiError, conflict, json, notFound, preflight, readJson, route } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { questionPatchSchema } from "@/lib/schemas";
@@ -10,22 +11,69 @@ export const GET = route(async (req, ctx) => {
   await requireSession(req);
   const { id } = await ctx.params;
 
-  const question = await prisma.question.findUnique({ where: { id }, include: { theme: true } });
+  const [question, answerCount] = await Promise.all([
+    prisma.question.findUnique({ where: { id }, include: { theme: true } }),
+    prisma.answer.count({ where: { questionId: id } }),
+  ]);
   if (!question) throw notFound("That question no longer exists");
 
-  return json(req, { question: questionDetail(question) });
+  const day = await dayInfo(question.quizDate);
+  return json(req, { question: questionDetail(question, day.live, answerCount), day });
 });
 
 export const PATCH = route(async (req, ctx) => {
   const session = await requireSession(req);
   const { id } = await ctx.params;
 
-  const existing = await prisma.question.findUnique({ where: { id } });
+  const [existing, answerCount] = await Promise.all([
+    prisma.question.findUnique({ where: { id } }),
+    prisma.answer.count({ where: { questionId: id } }),
+  ]);
   if (!existing) throw notFound("That question no longer exists");
 
-  const patch = questionPatchSchema.parse(await readJson(req));
-
+  const { publishDay: publish, ...patch } = questionPatchSchema.parse(await readJson(req));
   const merged = { ...existing, ...patch };
+
+  const moving =
+    merged.quizDate !== existing.quizDate ||
+    merged.slot !== existing.slot ||
+    merged.isBonus !== existing.isBonus;
+
+  const [fromLive, toLive] = await Promise.all([
+    isLive(existing.quizDate),
+    merged.quizDate === existing.quizDate ? Promise.resolve(false) : isLive(merged.quizDate),
+  ]);
+
+  // A live day keeps its questions where they are…
+  if (moving && fromLive) {
+    throw new ApiError(
+      `${existing.quizDate} is live, so this question can't be moved. Unpublish the day from the Schedule first.`,
+      409,
+      { fieldErrors: { quizDate: "Locked while this day is live" } },
+    );
+  }
+  // …and can only gain a bonus, never another core question.
+  if (toLive && !merged.isBonus) {
+    throw conflict(`${merged.quizDate} is live, so only a bonus question can be moved onto it.`);
+  }
+
+  // What members answered cannot change underneath them.
+  if (answerCount > 0) {
+    const optionsChanged =
+      patch.options !== undefined &&
+      (patch.options.length !== existing.options.length ||
+        patch.options.some((option, i) => option !== existing.options[i]));
+    const answerChanged =
+      patch.correctIndex !== undefined && patch.correctIndex !== existing.correctIndex;
+    if (optionsChanged || answerChanged) {
+      throw new ApiError(
+        "Members have already answered this question, so its options and correct answer are locked.",
+        409,
+        { fieldErrors: { options: "Locked — members have already answered this question" } },
+      );
+    }
+  }
+
   if (merged.correctIndex >= merged.options.length) {
     throw new ApiError("The correct answer must be one of the options", 422, {
       fieldErrors: { correctIndex: "Pick one of the options above" },
@@ -38,10 +86,7 @@ export const PATCH = route(async (req, ctx) => {
   }
 
   // Moving a question onto a date/slot that is already taken.
-  if (
-    (patch.quizDate && patch.quizDate !== existing.quizDate) ||
-    (patch.slot && patch.slot !== existing.slot)
-  ) {
+  if (moving) {
     const clash = await prisma.question.findUnique({
       where: { quizDate_slot: { quizDate: merged.quizDate, slot: merged.slot } },
       select: { id: true },
@@ -51,32 +96,39 @@ export const PATCH = route(async (req, ctx) => {
     }
   }
 
-  const question = await prisma.question.update({
-    where: { id },
-    data: { ...patch, updatedById: session.sub },
-    include: { theme: true },
-  });
+  const question = await prisma.$transaction(async (tx) => {
+    const updated = await tx.question.update({
+      where: { id },
+      data: { ...patch, updatedById: session.sub },
+      include: { theme: true },
+    });
+    if (publish) await publishDay(tx, updated.quizDate, session.sub);
+    return updated;
+  }, TX_OPTIONS);
 
-  return json(req, { question: questionDetail(question) });
+  const day = await dayInfo(question.quizDate);
+  return json(req, { question: questionDetail(question, day.live, answerCount), day });
 });
 
 export const DELETE = route(async (req, ctx) => {
   await requireSession(req);
   const { id } = await ctx.params;
 
-  const answers = await prisma.answer.count({ where: { questionId: id } });
+  const [question, answers] = await Promise.all([
+    prisma.question.findUnique({ where: { id }, select: { quizDate: true } }),
+    prisma.answer.count({ where: { questionId: id } }),
+  ]);
+  if (!question) throw notFound("That question no longer exists");
+
+  if (await isLive(question.quizDate)) {
+    throw conflict(
+      `${question.quizDate} is live. Unpublish the day from the Schedule before deleting its questions.`,
+    );
+  }
+  // Unreachable in practice — a day with answers can't be unpublished — but
+  // deleting would take members' history with it, so it is refused outright.
   if (answers > 0) {
-    // Members have already played it; removing the row would break their history.
-    const question = await prisma.question.update({
-      where: { id },
-      data: { status: "ARCHIVED" },
-      include: { theme: true },
-    });
-    return json(req, {
-      archived: true,
-      message: `${answers} members have answered this, so it was archived instead of deleted.`,
-      question: questionDetail(question),
-    });
+    throw conflict("Members have already answered this question, so it can't be deleted.");
   }
 
   await prisma.question.delete({ where: { id } });

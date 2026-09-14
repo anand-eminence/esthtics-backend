@@ -22,12 +22,45 @@ const optionalUrl = urlish.optional().default("");
  *  rather than being blanked out. */
 const patchUrl = urlish.optional();
 
+/**
+ * A link a member opens from inside the quiz — a question's source and its
+ * "go deeper" link. Stricter than urlish on purpose. It must be absolute: the
+ * quiz is framed on its own host, so a bare /path would resolve there rather
+ * than on the community site. And it must have a real hostname, so
+ * "https://deeper" or a sentence pasted into the box is refused at save time
+ * instead of becoming a dead link in front of a member.
+ */
+export function linkProblem(value: string): string | null {
+  if (/\s/.test(value)) return "Links cannot contain spaces";
+  if (!/^https?:\/\//i.test(value)) return "Start the link with https://";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "Enter a valid link, e.g. https://example.com";
+  }
+  if (!/^(localhost|([a-z0-9-]+\.)+[a-z0-9-]{2,})$/i.test(url.hostname)) {
+    return "Enter a valid link, e.g. https://example.com";
+  }
+  return null;
+}
+
+const memberLink = z
+  .string()
+  .trim()
+  .max(2048)
+  .superRefine((value, ctx) => {
+    if (value === "") return;
+    const problem = linkProblem(value);
+    if (problem) ctx.addIssue({ code: "custom", message: problem });
+  })
+  .optional()
+  .default("");
+
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email address"),
   password: z.string().min(1, "Enter your password"),
 });
-
-export const questionStatus = z.enum(["DRAFT", "READY", "PUBLISHED", "ARCHIVED"]);
 
 const questionBase = z.object({
   quizDate,
@@ -46,10 +79,12 @@ const questionBase = z.object({
   chairText: z.string().trim().max(2000).optional().default(""),
   deepDiveText: z.string().trim().max(4000).optional().default(""),
   sourceLabel: z.string().trim().max(200).optional().default(""),
-  sourceUrl: optionalUrl,
-  goDeeperUrl: optionalUrl,
+  sourceUrl: memberLink,
+  goDeeperUrl: memberLink,
   internalNotes: z.string().trim().max(2000).optional().default(""),
-  status: questionStatus.optional().default("DRAFT"),
+  // Not a column. Asks the API to publish the question's day in the same
+  // transaction as the save — the "Save & publish day" button.
+  publishDay: z.boolean().optional().default(false),
 });
 
 export const questionSchema = questionBase
@@ -85,25 +120,17 @@ export const featuredPatchSchema = featuredSchema.partial();
 // and an unsent field must keep its stored value.
 export const settingsSchema = z.object({
   timezone: z.string().trim().min(1).max(64).optional(),
-  questionsPerDay: z.coerce.number().int().min(1).max(10).optional(),
   bonusEnabled: z.boolean().optional(),
   joinUrl: patchUrl,
   defaultGoDeeperUrl: patchUrl,
-  referralUrl: patchUrl,
   quizEmbedUrl: patchUrl,
-});
-
-// There is only one role, so an invite cannot pick one.
-export const inviteSchema = z.object({
-  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
-  name: z.string().trim().min(1, "Enter a name").max(120),
 });
 
 export const questionListQuery = z.object({
   search: z.string().trim().optional(),
   date: z.string().trim().optional(), // YYYY-MM-DD (one day) or YYYY-MM (a month)
   themeId: z.string().trim().optional(),
-  status: questionStatus.optional(),
+  day: z.enum(["live", "not_live"]).optional(),
   slot: z.coerce.number().int().min(1).max(4).optional(),
   page: z.coerce.number().int().min(1).default(1),
   perPage: z.coerce.number().int().min(1).max(100).default(25),

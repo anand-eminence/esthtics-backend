@@ -27,11 +27,9 @@ async function main() {
     create: {
       id: "singleton",
       timezone: process.env.QUIZ_TIMEZONE || "America/New_York",
-      questionsPerDay: 3,
       bonusEnabled: true,
       joinUrl: "https://www.esticonfidential.com/join",
       defaultGoDeeperUrl: "https://www.esticonfidential.com/library",
-      referralUrl: "",
       quizEmbedUrl: process.env.SEED_QUIZ_EMBED_URL || "http://localhost:4000/quiz",
     },
     update: {},

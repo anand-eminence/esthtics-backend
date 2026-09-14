@@ -24,7 +24,7 @@ export const GET = route(async (req) =>
       member: "GET /api/admin/members/:id",
       statistics: "GET /api/admin/statistics?date=YYYY-MM-DD",
       settings: "GET|PATCH /api/admin/settings",
-      users: "GET|POST /api/admin/users",
+      users: "GET /api/admin/users",
       quiz: {
         today: "GET /api/quiz/today?uid=&email=&name=",
         answer: "POST /api/quiz/answer",

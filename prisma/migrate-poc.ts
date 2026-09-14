@@ -11,10 +11,11 @@
  *   track -> displayTag        aha   -> whyThisMatters
  *   lbl   -> chairLabel        chair -> chairText
  *   slug  -> internalNotes     DailyDrop -> FeaturedContent
+ *   status "published" on a question -> a published QuizDay for its date
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { PrismaClient, type QuestionStatus } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -117,12 +118,26 @@ async function main() {
       sourceUrl: q.sourceUrl || "",
       // The POC's slug has no home in the new schema; keep it as provenance.
       internalNotes: q.slug ? `Imported from the POC (slug: ${q.slug})` : "",
-      status: (q.status === "published" ? "PUBLISHED" : "DRAFT") as QuestionStatus,
     };
 
     await prisma.question.upsert({ where: { id: q.id }, create: { id: q.id, ...data }, update: data });
   }
   console.log(`Questions     ${questions.length}`);
+
+  // -------------------------------------------------------------- quiz days
+  // Publishing is per day here. Every date the POC served goes in as a live
+  // day, so the imported answers stay attached to a day members could play.
+  const servedDates = Array.from(
+    new Set(questions.filter((q) => q.status === "published").map((q) => q.quizDate)),
+  );
+  for (const quizDate of servedDates) {
+    await prisma.quizDay.upsert({
+      where: { quizDate },
+      create: { quizDate, publishedAt: new Date() },
+      update: {},
+    });
+  }
+  console.log(`Quiz days     ${servedDates.length} published`);
 
   // ---------------------------------------------------------------- answers
   const answers = readCsv(join(dir, "Answer.csv"));

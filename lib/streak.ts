@@ -12,8 +12,8 @@ import { previousScheduledDate, type ServedQuestion } from "./quiz";
  *     non-bonus questions. Two out of three does not extend the streak.
  *  2. The bonus question never affects score or streak (Q7 says as much on
  *     screen). It is recorded, but excluded from answeredCount/correctCount.
- *  3. A day with nothing scheduled is skipped, not counted as a miss — see
- *     previousScheduledDate(). An empty day is an admin gap, not the member's.
+ *  3. A day that never went live is skipped, not counted as a miss — see
+ *     previousScheduledDate(). An unpublished day is an admin gap, not the member's.
  *  4. No grace period. Miss a scheduled day and the streak restarts at 1.
  */
 
